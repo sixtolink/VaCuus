@@ -12,6 +12,7 @@
 // FPlatformProperties::IniPlatformName (Core), both for the one-shot platform log below.
 #include "HAL/PlatformApplicationMisc.h"
 #include "HAL/PlatformProperties.h"
+#include "HAL/PlatformTime.h"
 #include "Null/NullPlatformApplicationMisc.h"
 
 // Types.h FIRST, and this is not include hygiene for its own sake: TextInputHandler.h has
@@ -57,6 +58,31 @@ public:
 	{
 		if (InContext == nullptr)
 		{
+			return;
+		}
+
+		// REFORMAT CHURN KEEPER (2026-11-18). RmlUi re-resolves focus while a MULTILINE
+		// field reformats (line elements rebuilt as text grows/overflows): it fires
+		// Blur+Focus on the SAME field between two keystrokes. Each cycle bumped the
+		// generation twice (Clear + activate), and every mutation still carrying the old
+		// stamp was then dropped by ApplyMutation's guard -- the owner-visible failure was
+		// the field "clearing and stopping all input" the moment multiline content grew.
+		// A deactivate/activate pair on the SAME context pointer inside the churn window,
+		// with no other field activated in between, is reformat churn, not a field swap:
+		// roll the generation back to what it was before the pair. A genuine re-focus of
+		// the same field after the platform truly deactivated it (document hide/show) keeps
+		// the bump -- the queued-mutation staleness the bump exists for is real there.
+		const double Now = FPlatformTime::Seconds();
+		if (InContext == LastClearedContext && Generation == GenerationAfterLastClear &&
+			Now - LastClearedTime < 2.0)
+		{
+			Generation = GenerationBeforeLastClear;
+			LastClearedContext = nullptr;
+			ActiveContext = InContext;
+			CompositionBegin = 0;
+			CompositionEnd = 0;
+			UE_LOG(LogVaCuus, Verbose,
+				TEXT("IME: RmlUi re-focused the same text field inside the churn window (field generation %llu kept)"), Generation);
 			return;
 		}
 
@@ -115,7 +141,13 @@ public:
 		// (UpdateCompositionRange, EndComposition), where the stamp is exactly the right guard.
 		InContext->SetCompositionRange(0, 0);
 
+		// Stash for the churn keeper in OnActivate: what the pointer was, what the
+		// generation was before this deactivation's Clear() bump, and when.
+		LastClearedContext = ActiveContext;
+		GenerationBeforeLastClear = Generation;
+		LastClearedTime = FPlatformTime::Seconds();
 		Clear();
+		GenerationAfterLastClear = Generation;
 		UE_LOG(LogVaCuus, Verbose, TEXT("IME: RmlUi deactivated the text field (field generation %llu)"), Generation);
 	}
 
@@ -176,6 +208,13 @@ private:
 
 	/** Raw, non-owning, UI thread only. Null between fields and after OnDestroy. */
 	Rml::TextInputContext* ActiveContext = nullptr;
+
+	// Churn-keeper bookkeeping (see OnActivate): the context that just deactivated, the
+	// generation before and after that deactivation's Clear() bump, and when it happened.
+	Rml::TextInputContext* LastClearedContext = nullptr;
+	uint64 GenerationBeforeLastClear = 0;
+	uint64 GenerationAfterLastClear = 0;
+	double LastClearedTime = 0.0;
 
 	/**
 	 * The composing span this handler last pushed into RmlUi, in RmlUi CHARACTER offsets.
