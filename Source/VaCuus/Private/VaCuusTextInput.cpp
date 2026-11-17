@@ -819,12 +819,32 @@ public:
 
 	virtual void SetTextInRange(const uint32 InBeginIndex, const uint32 InLength, const FString& InString) override
 	{
-		// MIRROR FIRST, QUEUE SECOND -- and both against the same "before" text.
-		// The queue call converts UTF-16 indices against CurrentValue(), so it has to run
-		// BEFORE the mirror is mutated, or the converted range would describe the new text.
+		UE_LOG(LogVaCuus, Warning, TEXT("[IME-TRACE] SetTextInRange b=%u l=%u s='%s' | live='%s' state='%s' composing=%d comp=[%d,%d]"),
+			InBeginIndex, InLength, *InString, *LiveValue, *State.Value, bIsComposing ? 1 : 0,
+			CompositionBeginIndex, CompositionEndIndex);
 		const FString Before = CurrentValue();
-		const int32 Begin = FMath::Clamp(int32(InBeginIndex), 0, Before.Len());
-		const int32 End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Before.Len());
+
+		// DURING A COMPOSITION, THE WHOLE COMPOSITION SPAN IS REPLACED -- the incoming
+		// BeginIndex/InLength are NOT the span to splice.
+		//
+		// Windows re-sends the ENTIRE composition string on every keystroke
+		// ("n" -> "ni" -> "nih" -> "niha" -> ...) and passes a BeginIndex that follows the
+		// caret, so splicing at that index appends instead of replacing: "n" then "ni" at
+		// index 1 yields "nni", then "nih" at index 3 yields "nninih". The commit then
+		// publishes the duplicated text, which is exactly the corruption this was showing.
+		// The authoritative span is the one BeginComposition/UpdateCompositionRange gave us.
+		int32 Begin = 0;
+		int32 End = 0;
+		if (bIsComposing)
+		{
+			Begin = FMath::Clamp(CompositionBeginIndex, 0, Before.Len());
+			End = FMath::Clamp(CompositionEndIndex, Begin, Before.Len());
+		}
+		else
+		{
+			Begin = FMath::Clamp(int32(InBeginIndex), 0, Before.Len());
+			End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Before.Len());
+		}
 
 		QueueText(EVaCuusInputEventKind::ImeSetTextInRange, Begin, End, InString);
 
@@ -833,11 +853,13 @@ public:
 		LiveSelectionEnd = LiveSelectionBegin;
 		bLiveDirty = true;
 
-		// A write that lands inside a composition IS the composition text: keep the span on it.
 		if (bIsComposing)
 		{
+			// The composition span follows the text that replaced it, and RmlUi has to hear
+			// about the new span or the underline keeps describing the old one.
 			CompositionBeginIndex = Begin;
 			CompositionEndIndex = Begin + InString.Len();
+			QueueCompositionRange(CompositionBeginIndex, CompositionEndIndex);
 		}
 	}
 
@@ -905,6 +927,8 @@ public:
 
 	virtual void BeginComposition() override
 	{
+		UE_LOG(LogVaCuus, Warning, TEXT("[IME-TRACE] BeginComposition | live='%s' state='%s' sel=[%d,%d]"),
+			*LiveValue, *State.Value, CurrentSelectionBegin(), CurrentSelectionEnd());
 		bIsComposing = true;
 
 		// The composition starts where the caret is, which is the shadow selection -- TSF
@@ -917,6 +941,8 @@ public:
 
 	virtual void UpdateCompositionRange(const int32 InBeginIndex, const uint32 InLength) override
 	{
+		UE_LOG(LogVaCuus, Warning, TEXT("[IME-TRACE] UpdateCompositionRange b=%d l=%u | live='%s' state='%s'"),
+			InBeginIndex, InLength, *LiveValue, *State.Value);
 		if (!bIsComposing)
 		{
 			// TSF should not send this outside a composition; if it does, honouring it would
@@ -932,6 +958,8 @@ public:
 
 	virtual void EndComposition() override
 	{
+		UE_LOG(LogVaCuus, Warning, TEXT("[IME-TRACE] EndComposition | live='%s' state='%s' comp=[%d,%d]"),
+			*LiveValue, *State.Value, CompositionBeginIndex, CompositionEndIndex);
 		if (!bIsComposing)
 		{
 			return;
@@ -956,19 +984,6 @@ public:
 		bIsComposing = false;
 
 		QueueText(EVaCuusInputEventKind::ImeCommitComposition, Begin, End, Composed);
-
-		// THE COMMIT ABOVE ASSUMES ITS RANGE IS STILL VALID WHEN THE UI THREAD GETS TO IT.
-		// It is not, necessarily: SetTextInRange writes queued in the same game-thread burst
-		// can leave the queue with work in front of this commit, and every one of those
-		// writes was converted against the LIVE MIRROR, not against whatever text RmlUi
-		// happens to hold when it drains. When the two disagree by even one character the
-		// commit lands on the wrong span and the field comes out in the wrong ORDER -- not
-		// truncated, reordered, which is exactly what this looks like from the outside.
-		//
-		// So the commit keeps its job (maxlength, change notification) and this replaces the
-		// whole value afterwards from the mirror, which is the one authority that never lost
-		// track of the text. Idempotent when the commit was already right.
-		QueueWholeValue(LiveValue);
 
 		CompositionBeginIndex = 0;
 		CompositionEndIndex = 0;
