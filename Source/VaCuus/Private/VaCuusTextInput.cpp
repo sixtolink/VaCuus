@@ -444,6 +444,31 @@ bool FillTextFieldState(Rml::Context& Context, FVaCuusTextFieldState& OutState)
 	return true;
 }
 
+/**
+ * Multiline scroll-follow for the QUEUED write/commit path (2026-11-18).
+ *
+ * RmlUi's own key path runs SetSelectionRange -> MoveToCursor synchronously while the
+ * element is focused, and that is what scrolls a textarea to its caret. The queue
+ * applies a frame later, when a reformat's transient Blur may have dropped the cursor
+ * blink (IsFocused() == false) and SetCursorPosition was silently swallowed -- the
+ * owner-visible result was content growing past the box with scrollTop frozen at 0
+ * ("candidates show, selection commits, nothing changes on screen"). Regression:
+ * VaCuus.Input.MultilineRealPage asserts scrollTop > 0 after overflow.
+ *
+ * The element's own scroll range is independent of the cursor blink, so for the
+ * append case (the IME norm: caret at the very end) clamp scrollTop to include the
+ * caret's end. Mid-text edits keep the current scroll position.
+ */
+static void ScrollElementToCaretEnd(Rml::Element& Element)
+{
+	const float MaxScrollTop = Element.GetScrollHeight() - Element.GetClientHeight();
+	if (MaxScrollTop <= 0.f)
+	{
+		return;	 // single-line inputs and non-scrolling boxes never grow a range
+	}
+	Element.SetScrollTop(MaxScrollTop);
+}
+
 void ApplyMutation(Rml::Context& Context, uint32 ViewId, const FVaCuusInputEvent& Event)
 {
 	check(FVaCuusUIThread::IsInUIThread());
@@ -504,22 +529,23 @@ void ApplyMutation(Rml::Context& Context, uint32 ViewId, const FVaCuusInputEvent
 
 	switch (Event.Kind)
 	{
-		case EVaCuusInputEventKind::ImeSetTextInRange:
-		{
-			// The Rml::String is a NAMED LOCAL on purpose: StringView is non-owning
-			// (StringUtilities.h:127), so handing it a temporary's data would be a
-			// use-after-free the moment the argument list ends.
-			const Rml::String Utf8Text(TCHAR_TO_UTF8(*Event.Text));
-			Target->SetText(Rml::StringView(Utf8Text), Event.RangeBegin, Event.RangeEnd);
+	case EVaCuusInputEventKind::ImeSetTextInRange:
+	{
+		// The Rml::String is a NAMED LOCAL on purpose: StringView is non-owning
+		// (StringUtilities.h:127), so handing it a temporary's data would be a
+		// use-after-free the moment the argument list ends.
+		const Rml::String Utf8Text(TCHAR_TO_UTF8(*Event.Text));
+		Target->SetText(Rml::StringView(Utf8Text), Event.RangeBegin, Event.RangeEnd);
 
-			// SetText does NOT move the caret (TextInputContext.h:44-49 replaces the range and
-			// nothing else), and TSF expects it after the inserted text -- the same place
-			// WidgetTextInputContext::SetCursorPosition would put it.
-			const int32 CaretChars =
-				Event.RangeBegin + int32(Rml::StringUtilities::LengthUTF8(Rml::StringView(Utf8Text)));
-			Target->SetCursorPosition(CaretChars);
-			break;
-		}
+		// SetText does NOT move the caret (TextInputContext.h:44-49 replaces the range and
+		// nothing else), and TSF expects it after the inserted text -- the same place
+		// WidgetTextInputContext::SetCursorPosition would put it.
+		const int32 CaretChars =
+			Event.RangeBegin + int32(Rml::StringUtilities::LengthUTF8(Rml::StringView(Utf8Text)));
+		Target->SetCursorPosition(CaretChars);
+		ScrollElementToCaretEnd(*Focus);
+		break;
+	}
 
 		case EVaCuusInputEventKind::ImeSetSelectionRange:
 			Target->SetSelectionRange(Event.RangeBegin, Event.RangeEnd);
@@ -565,6 +591,7 @@ void ApplyMutation(Rml::Context& Context, uint32 ViewId, const FVaCuusInputEvent
 			const int32 CaretChars =
 				Event.RangeBegin + int32(Rml::StringUtilities::LengthUTF8(Rml::StringView(Utf8Text)));
 			Target->SetCursorPosition(CaretChars);
+			ScrollElementToCaretEnd(*Focus);
 			break;
 		}
 

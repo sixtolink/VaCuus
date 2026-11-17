@@ -88,6 +88,9 @@ public:
 				const Rml::Vector2f Size = Multi->GetBox().GetSize(Rml::BoxArea::Border);
 				MultiRect = FIntRect(FMath::RoundToInt(P.x), FMath::RoundToInt(P.y),
 					FMath::RoundToInt(P.x + Size.x), FMath::RoundToInt(P.y + Size.y));
+				MultiScrollTop = Multi->GetScrollTop();
+				MultiScrollHeight = Multi->GetScrollHeight();
+				MultiClientHeight = Multi->GetClientHeight();
 			}
 		}
 
@@ -97,6 +100,9 @@ public:
 	FString FieldValue;
 	FString MultiValue;
 	FIntRect MultiRect;
+	float MultiScrollTop = -1.0f;
+	float MultiScrollHeight = -1.0f;
+	float MultiClientHeight = -1.0f;
 
 private:
 	uint64 SnapshotGeneration = 0;
@@ -300,7 +306,8 @@ bool FVaCuusImeMultilineTest::RunTest(const FString& Parameters)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-static const TCHAR* GRealDocument = TEXT(R"RML(<!-- imedemo.rml - IME 输入验证页（示例） -->
+static const TCHAR* GRealDocument =
+	TEXT(R"RML(<!-- imedemo.rml - IME 输入验证页（示例） -->
 <rml>
 <head>
 <style>
@@ -511,9 +518,11 @@ h1 {
 
 /* height 96 = 24 * 3 lines + 12 + 12 */
 .text-area {
+	display: block;   /* 2026-11-18: scroll trio complete -- inline never becomes a scroll container (m2_demo comment); without block, GetScrollHeight stays 0 even with overflow-y:auto */
 	box-sizing: border-box;
 	width: 100%;
 	height: 96px;
+	overflow-y: auto;   /* 2026-11-18: RmlUi has no UA sheet -- without this the scrollbar never enables, MoveToCursor's scroll-follow clamps to 0, and line 4+ lands outside the box (the overflow Enter anomaly). m2_demo.rcss documents the same trio: block + height + overflow-y. */
 	padding: 12px 14px;
 	background: #070c16;
 	border: 1px solid #253550;
@@ -562,7 +571,8 @@ h1 {
 	color: #93a4c1;
 	border-bottom: 1px solid #131d2e;
 }
-</style>
+</style>)RML")
+	TEXT(R"RML(
 	<title>IME 输入验证</title>
 	
 	
@@ -726,6 +736,30 @@ bool FVaCuusImeRealPageTest::RunTest(const FString& Parameters)
 	}
 	View->PollStatus();
 	TestEqual(TEXT("Real page: English appended"), Host->MultiValue, FString(TEXT("你好xy")));
+
+	// ── OVERFLOW: keep committing lines past the ~3-line box and demand the view follow.
+	// Owner report: candidates appear, commits land (mirror verified live), but "nothing
+	// changes" on screen. If scroll-follow is dead, scrollTop stays 0 right here.
+	// ─────────────────────────────────────────────────────────────────────────────
+	for (int32 Line = 0; Line < 4; ++Line)
+	{
+		const int32 At = Host->MultiValue.Len();
+		ImeContext->BeginComposition();
+		ImeContext->SetTextInRange(At, 0, TEXT("行"));
+		ImeContext->EndComposition();
+		Widget->OnKeyDown(Geometry, MakeKeyEvent(EKeys::Enter));
+		if (!TestTrue(TEXT("Overflow loop frame"), RunFrames(*UIThread, 2)))
+		{
+			return false;
+		}
+		View->PollStatus();
+	}
+	AddInfo(FString::Printf(TEXT("Overflow end: len=%d nl=%d scrollTop=%.1f scrollH=%.1f clientH=%.1f"),
+		Host->MultiValue.Len(), Host->MultiValue.Contains(TEXT("\n")) ? 1 : 0, Host->MultiScrollTop,
+		Host->MultiScrollHeight, Host->MultiClientHeight));
+	TestTrue(TEXT("Overflow: value survived with newlines"), Host->MultiValue.Contains(TEXT("\n")));
+	TestTrue(TEXT("Overflow: textarea scrolled to follow the caret (scrollTop > 0)"),
+		Host->MultiScrollTop > 0.0f);
 
 	return true;
 }

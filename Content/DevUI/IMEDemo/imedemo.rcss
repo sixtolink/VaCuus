@@ -115,6 +115,7 @@ h1 {
 
 /* height 96 = 24 * 3 lines + 12 + 12 */
 .text-area {
+	display: block;   /* 2026-11-18: scroll trio complete -- inline never becomes a scroll container (m2_demo comment); without block, GetScrollHeight stays 0 even with overflow-y:auto */
 	box-sizing: border-box;
 	width: 100%;
 	height: 96px;
