@@ -957,6 +957,19 @@ public:
 
 		QueueText(EVaCuusInputEventKind::ImeCommitComposition, Begin, End, Composed);
 
+		// THE COMMIT ABOVE ASSUMES ITS RANGE IS STILL VALID WHEN THE UI THREAD GETS TO IT.
+		// It is not, necessarily: SetTextInRange writes queued in the same game-thread burst
+		// can leave the queue with work in front of this commit, and every one of those
+		// writes was converted against the LIVE MIRROR, not against whatever text RmlUi
+		// happens to hold when it drains. When the two disagree by even one character the
+		// commit lands on the wrong span and the field comes out in the wrong ORDER -- not
+		// truncated, reordered, which is exactly what this looks like from the outside.
+		//
+		// So the commit keeps its job (maxlength, change notification) and this replaces the
+		// whole value afterwards from the mirror, which is the one authority that never lost
+		// track of the text. Idempotent when the commit was already right.
+		QueueWholeValue(LiveValue);
+
 		CompositionBeginIndex = 0;
 		CompositionEndIndex = 0;
 	}
@@ -1015,6 +1028,14 @@ private:
 	void QueueSelectionRange(int32 Utf16Begin, int32 Utf16End, bool bCaretAtBeginning);
 	void QueueText(EVaCuusInputEventKind Kind, int32 Utf16Begin, int32 Utf16End, const FString& Text);
 	void QueueCompositionRange(int32 Utf16Begin, int32 Utf16End);
+
+	/**
+	 * Replace the field's ENTIRE value with Text, without going through the range
+	 * arithmetic the Ime* events depend on. RangeEnd is INT32_MAX on purpose: RmlUi clamps
+	 * it to the live text, so this lands correctly no matter how far behind its copy of
+	 * the value is.
+	 */
+	void QueueWholeValue(const FString& Text);
 };
 
 //~ The queue helpers are out of line because they need UVaCuusView's full definition, which
@@ -1068,6 +1089,19 @@ void FVaCuusTextInputMethodContext::QueueCompositionRange(int32 Utf16Begin, int3
 	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16End);
 
 	Owner->QueueImeEvent(FVaCuusInputEvent::ImeSetCompositionRange(State.Generation, BeginChars, EndChars));
+}
+
+void FVaCuusTextInputMethodContext::QueueWholeValue(const FString& Text)
+{
+	if (Owner == nullptr)
+	{
+		return;
+	}
+
+	// NO INDEX CONVERSION, DELIBERATELY. This is the one path that must not depend on the
+	// caller and RmlUi agreeing about where the text currently ends; see the call site in
+	// EndComposition. Begin 0 + a RangeEnd RmlUi clamps == "the whole value".
+	Owner->QueueImeEvent(FVaCuusInputEvent::ImeSetTextInRange(State.Generation, 0, TNumericLimits<int32>::Max(), Text));
 }
 
 TSharedRef<FVaCuusImeHandler> FVaCuusImeHandler::Create(UVaCuusView& InView)
