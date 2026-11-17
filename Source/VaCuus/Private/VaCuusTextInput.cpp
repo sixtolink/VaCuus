@@ -701,8 +701,8 @@ public:
 	{
 		Owner = nullptr;
 		bIsComposing = false;
-		CompositionBeginIndex = 0;
-		CompositionEndIndex = 0;
+		CompositionBeginIndex = INDEX_NONE;
+		CompositionEndIndex = INDEX_NONE;
 		State.Reset();
 		LiveValue.Reset();
 		LiveSelectionBegin = 0;
@@ -777,8 +777,8 @@ public:
 
 		bIsComposing = false;
 		QueueCompositionRange(0, 0);
-		CompositionBeginIndex = 0;
-		CompositionEndIndex = 0;
+		CompositionBeginIndex = INDEX_NONE;
+		CompositionEndIndex = INDEX_NONE;
 	}
 
 	//~ Begin ITextInputMethodContext
@@ -836,13 +836,17 @@ public:
 		// The authoritative span is the one BeginComposition/UpdateCompositionRange gave us.
 		int32 Begin = 0;
 		int32 End = 0;
-		if (bIsComposing)
+		if (bIsComposing && CompositionBeginIndex != INDEX_NONE)
 		{
+			// The span is known: replace it wholesale. This is the case the platform drives
+			// after the first keystroke of a composition.
 			Begin = FMath::Clamp(CompositionBeginIndex, 0, Before.Len());
 			End = FMath::Clamp(CompositionEndIndex, Begin, Before.Len());
 		}
 		else
 		{
+			// First write of this composition (or no composition at all): the incoming range
+			// is the authority. For a composition this also seeds the span below.
 			Begin = FMath::Clamp(int32(InBeginIndex), 0, Before.Len());
 			End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Before.Len());
 		}
@@ -933,12 +937,16 @@ public:
 			*LiveValue, *State.Value, CurrentSelectionBegin(), CurrentSelectionEnd());
 		bIsComposing = true;
 
-		// The composition starts where the caret is, which is the shadow selection -- TSF
-		// composes over the current selection when there is one. Captured now because the
-		// range TSF sends to UpdateCompositionRange is relative to the whole text, and the
-		// commit needs to know which span to replace even if the selection has moved since.
-		CompositionBeginIndex = FMath::Clamp(CurrentSelectionBegin(), 0, CurrentValue().Len());
-		CompositionEndIndex = FMath::Clamp(CurrentSelectionEnd(), CompositionBeginIndex, CurrentValue().Len());
+		// THE SPAN IS UNKNOWN UNTIL SOMETHING TELLS US WHERE IT IS.
+		//
+		// Seeding it from the caret looked right and was not: Windows ends one composition and
+		// starts the next for every syllable, so the caret is already past the text that is
+		// about to be re-sent. The span then came out empty at [N,N), "replace the span" became
+		// "insert at N", and consecutive syllables piled up ("sss's", "ni" -> "nni").
+		//
+		// First writer wins: SetTextInRange's own BeginIndex (or UpdateCompositionRange).
+		CompositionBeginIndex = INDEX_NONE;
+		CompositionEndIndex = INDEX_NONE;
 	}
 
 	virtual void UpdateCompositionRange(const int32 InBeginIndex, const uint32 InLength) override
@@ -954,7 +962,8 @@ public:
 		}
 
 		CompositionBeginIndex = FMath::Clamp(InBeginIndex, 0, CurrentValue().Len());
-		CompositionEndIndex = FMath::Clamp(InBeginIndex + int32(InLength), CompositionBeginIndex, CurrentValue().Len());
+		CompositionEndIndex =
+			FMath::Clamp(InBeginIndex + int32(InLength), CompositionBeginIndex, CurrentValue().Len());
 		QueueCompositionRange(CompositionBeginIndex, CompositionEndIndex);
 	}
 
@@ -976,8 +985,9 @@ public:
 		// the previous frame's "nihao" -- committing from it replaces the result with the pinyin.
 		// The mirror is updated synchronously by SetTextInRange, so it already has "你好".
 		const FString& LiveText = CurrentValue();
-		const int32 Begin = FMath::Clamp(CompositionBeginIndex, 0, LiveText.Len());
-		const int32 End = FMath::Clamp(CompositionEndIndex, Begin, LiveText.Len());
+		const bool bSpanKnown = CompositionBeginIndex != INDEX_NONE;
+		const int32 Begin = bSpanKnown ? FMath::Clamp(CompositionBeginIndex, 0, LiveText.Len()) : LiveText.Len();
+		const int32 End = bSpanKnown ? FMath::Clamp(CompositionEndIndex, Begin, LiveText.Len()) : Begin;
 		const FString Composed = LiveText.Mid(Begin, End - Begin);
 
 		// bIsComposing is cleared BEFORE the queue call so the notifier suppression in the
@@ -998,8 +1008,13 @@ public:
 		// that is the right trade, and it is stated here rather than discovered later.
 		QueueWholeValue(LiveValue);
 
-		CompositionBeginIndex = 0;
-		CompositionEndIndex = 0;
+		// The whole-value path does not pass through CommitComposition, so nothing else clears
+		// RmlUi's underline: without this the composed span keeps painting after the text has
+		// already been committed.
+		QueueCompositionRange(0, 0);
+
+		CompositionBeginIndex = INDEX_NONE;
+		CompositionEndIndex = INDEX_NONE;
 	}
 	//~ End ITextInputMethodContext
 
@@ -1028,8 +1043,9 @@ private:
 	bool bIsComposing = false;
 
 	/** The composing span in UTF-16 indices, owned here because TSF drives it. */
-	int32 CompositionBeginIndex = 0;
-	int32 CompositionEndIndex = 0;
+	/** INDEX_NONE until the platform tells us where this composition lives; see BeginComposition. */
+	int32 CompositionBeginIndex = INDEX_NONE;
+	int32 CompositionEndIndex = INDEX_NONE;
 
 	/** View pixels -> Slate absolute units, per axis. See FVaCuusImeSurface. */
 	FVector2D ViewToAbsoluteScale() const
