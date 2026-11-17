@@ -856,11 +856,12 @@ public:
 
 		if (bIsComposing)
 		{
-			// The composition span follows the text that replaced it, and RmlUi has to hear
-			// about the new span or the underline keeps describing the old one.
+			// The span is tracked here but NOT pushed as a composition-range event: TSF calls
+			// UpdateCompositionRange itself, and emitting a second range from inside the write
+			// re-enters RmlUi's composition state between two writes -- which is what made the
+			// candidate window stop appearing. EndComposition reads these two indices directly.
 			CompositionBeginIndex = Begin;
 			CompositionEndIndex = Begin + InString.Len();
-			QueueCompositionRange(CompositionBeginIndex, CompositionEndIndex);
 		}
 	}
 
