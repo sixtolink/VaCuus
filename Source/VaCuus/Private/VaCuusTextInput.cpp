@@ -985,7 +985,18 @@ public:
 		// with the same generation, so ordering against the mutations TSF already sent holds.
 		bIsComposing = false;
 
-		QueueText(EVaCuusInputEventKind::ImeCommitComposition, Begin, End, Composed);
+		// THE COMMIT GOES OUT AS A WHOLE-VALUE REPLACE, NOT AS CommitComposition.
+		//
+		// CommitComposition uses RmlUi's OWN recorded composition range (ime_composition_begin/
+		// end_index), which is set by SetCompositionRange. When the queue still holds writes the
+		// UI thread has not drained, that recorded range describes a shorter text than the one
+		// we are committing against -- and the commit then replaces the WRONG span, in the
+		// observed case the entire value: "nihao" + commit came out empty.
+		//
+		// Replacing the whole value from the mirror needs no agreement about spans at all. The
+		// cost is that el maxlength is not enforced on the commit path; for an IME test page
+		// that is the right trade, and it is stated here rather than discovered later.
+		QueueWholeValue(LiveValue);
 
 		CompositionBeginIndex = 0;
 		CompositionEndIndex = 0;
