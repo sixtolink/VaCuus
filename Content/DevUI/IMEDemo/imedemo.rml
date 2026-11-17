@@ -31,8 +31,12 @@
 		<div class="card" id="result-card">
 			<label class="field-label">实时结果</label>
 			<div id="result-row">
-				<span class="kv">提交值</span>
+				<span class="kv">single 值</span>
 				<span id="committed" class="value">—</span>
+			</div>
+			<div id="result-row">
+				<span class="kv">multi 值</span>
+				<span id="multivalue" class="value">—</span>
 			</div>
 			<div id="result-row">
 				<span class="kv">字符数</span>
@@ -42,6 +46,7 @@
 				<span class="kv">事件数</span>
 				<span id="eventcount" class="value">0</span>
 			</div>
+			<div class="hint">轮询显示（150ms）。原生 IME 上屏不走 DOM 事件，事件数只计普通键盘 textinput；innerHTML/textContent 在本 DOM 子集是空操作，故用 innerRML。若某行框内看不见文字而这里仍有值 → 渲染层问题，值未丢。</div>
 		</div>
 
 		<div class="card checklist">
@@ -60,31 +65,34 @@
 		var single = document.getElementById('single');
 		var multi = document.getElementById('multi');
 		var committedEl = document.getElementById('committed');
+		var multiEl = document.getElementById('multivalue');
 		var charEl = document.getElementById('charcount');
 		var eventEl = document.getElementById('eventcount');
 		var events = 0;
 
-		function refresh() {
-			var v = single.value || '';
-			committedEl.innerHTML = v.length ? v : '—';
-			charEl.innerHTML = String(v.length);
+		function esc(s) {
+			return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+				.replace(/>/g, '&gt;').replace(/\n/g, ' ⏎ ');
 		}
 
-		single.addEventListener('input', function() {
+		function refresh() {
+			var a = single.value || '';
+			var b = multi.value || '';
+			committedEl.innerRML = a.length ? esc(a) : '—';
+			multiEl.innerRML = b.length ? esc(b) : '—';
+			charEl.innerRML = String(a.length + b.length);
+		}
+
+		function bump() {
 			events++;
-			eventEl.innerHTML = String(events);
+			eventEl.innerRML = String(events);
 			refresh();
-		});
+		}
+		if (single) { single.addEventListener('textinput', bump); }
+		if (multi) { multi.addEventListener('textinput', bump); }
 
-		single.addEventListener('focus', function() {
-			events++;
-			eventEl.innerHTML = String(events);
-		});
-
-		single.addEventListener('blur', function() {
-			events++;
-			eventEl.innerHTML = String(events);
-		});
+		setInterval(refresh, 150);
+		refresh();
 	</script>
 </body>
 </rml>
