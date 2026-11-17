@@ -105,7 +105,10 @@ static const TCHAR* GDocument = TEXT(R"(<rml>
 <head>
 <style>
 body { display: block; width: 100%; height: 100%; font-family: LatoLatin; font-size: 14px; }
-#field { position: absolute; left: 50px; top: 50px; width: 300px; height: 200px; }
+/* 40px = one line: every newline after the first overflows the box. The owner
+   repro is "content clears once it passes the visible area, then no more input"
+   (2026-11-18) -- with this height the whole sequence below IS the overflow repro. */
+#field { position: absolute; left: 50px; top: 50px; width: 300px; height: 40px; }
 </style>
 </head>
 <body>

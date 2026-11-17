@@ -726,22 +726,28 @@ public:
 	 */
 	void SetShadowState(const FVaCuusTextFieldState& InState)
 	{
-		// A CHANGED SNAPSHOT OUTRANKS THE MIRROR, COMPOSITION OR NOT.
+		// COMPANY SYNC RULE, RESTORED: while a composition is in flight the mirror is NEVER
+		// overwritten (the snapshot is guaranteed to be behind it -- the OS can write text
+		// and end the composition inside a single game-thread message). Outside a
+		// composition the mirror re-converges with the snapshot as soon as it catches up.
 		//
-		// The mirror exists to stay ahead of a snapshot that is one frame behind. The moment
-		// the snapshot itself changes, RmlUi's text has changed with it, and the mirror has to
-		// follow or the two index spaces drift apart: the mirror keeps growing while the field
-		// stays short, every converted range then lands past the end, RmlUi clamps it to the
-		// end, and each write appends instead of replacing. That is the "n你n你n你" shape --
-		// not a range-arithmetic bug, a divergence that never re-synchronises.
-		//
-		// The old rule ("never overwrite the mirror while composing") is what made the
-		// divergence permanent. Keeping the mirror ahead is only needed WITHIN one game-thread
-		// burst, and no snapshot arrives inside a burst anyway, so this loses nothing.
+		// The earlier local rule ("a changed snapshot outranks the mirror, composition or
+		// not") was a compensating hack for the span-replace write path: with the company
+		// write semantics restored, RmlUi applies exactly the ops the mirror recorded, so
+		// the two converge naturally and mid-composition overwrites are only ever stale.
+		if (bIsComposing)
+		{
+			State = InState;
+			return;
+		}
+
 		const bool bSnapshotValueChanged = !State.Value.Equals(InState.Value, ESearchCase::CaseSensitive);
+		const bool bSelectionMoved =
+			InState.SelectionBegin != State.SelectionBegin || InState.SelectionEnd != State.SelectionEnd;
 		State = InState;
 
-		if (bSnapshotValueChanged || !bLiveDirty)
+		if (bSnapshotValueChanged || !bLiveDirty || bSelectionMoved ||
+			LiveValue.Equals(State.Value, ESearchCase::CaseSensitive))
 		{
 			LiveValue = State.Value;
 			LiveSelectionBegin = State.SelectionBegin;
@@ -806,8 +812,19 @@ public:
 
 	virtual void SetSelectionRange(const uint32 InBeginIndex, const uint32 InLength, const ECaretPosition InCaretPosition) override
 	{
-		QueueSelectionRange(
-			int32(InBeginIndex), int32(InBeginIndex + InLength), InCaretPosition == ECaretPosition::Beginning);
+		// THE MIRROR MUST CARRY THIS SELECTION IMMEDIATELY (company fix). The IME drives
+		// edits as select-then-insert (InsertAtInsertion): the engine derives the NEXT
+		// SetTextInRange from what GetSelectionRange answers, so a selection that only
+		// gets queued turns every IME insert into caret-append semantics (b=caret, l=0)
+		// and the composition model desynchronises -- the IME then refuses to convert.
+		const FString& Base = CurrentValue();
+		const int32 Begin = FMath::Clamp(int32(InBeginIndex), 0, Base.Len());
+		const int32 End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Base.Len());
+		LiveSelectionBegin = Begin;
+		LiveSelectionEnd = End;
+		bLiveDirty = true;
+
+		QueueSelectionRange(int32(InBeginIndex), int32(InBeginIndex + InLength), InCaretPosition == ECaretPosition::Beginning);
 	}
 
 	virtual void GetTextInRange(const uint32 InBeginIndex, const uint32 InLength, FString& OutString) override
@@ -823,47 +840,24 @@ public:
 		UE_LOG(LogVaCuus, Warning, TEXT("[IME-TRACE] SetTextInRange b=%u l=%u s='%s' | live='%s' state='%s' composing=%d comp=[%d,%d]"),
 			InBeginIndex, InLength, *InString, *LiveValue, *State.Value, bIsComposing ? 1 : 0,
 			CompositionBeginIndex, CompositionEndIndex);
-		const FString Before = CurrentValue();
 
-		// DURING A COMPOSITION, THE WHOLE COMPOSITION SPAN IS REPLACED -- the incoming
-		// BeginIndex/InLength are NOT the span to splice.
-		//
-		// Windows re-sends the ENTIRE composition string on every keystroke
-		// ("n" -> "ni" -> "nih" -> "niha" -> ...) and passes a BeginIndex that follows the
-		// caret, so splicing at that index appends instead of replacing: "n" then "ni" at
-		// index 1 yields "nni", then "nih" at index 3 yields "nninih". The commit then
-		// publishes the duplicated text, which is exactly the corruption this was showing.
-		// The authoritative span is the one BeginComposition/UpdateCompositionRange gave us.
-		int32 Begin = 0;
-		int32 End = 0;
-		if (bIsComposing && CompositionBeginIndex != INDEX_NONE)
-		{
-			// The span is known: replace it wholesale. This is the case the platform drives
-			// after the first keystroke of a composition.
-			Begin = FMath::Clamp(CompositionBeginIndex, 0, Before.Len());
-			End = FMath::Clamp(CompositionEndIndex, Begin, Before.Len());
-		}
-		else
-		{
-			// First write of this composition (or no composition at all): the incoming range
-			// is the authority. For a composition this also seeds the span below.
-			Begin = FMath::Clamp(int32(InBeginIndex), 0, Before.Len());
-			End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Before.Len());
-		}
+		// COMPANY FIX, RESTORED VERBATIM: the incoming range is the authority. The IME keeps
+		// the composition coherent by selecting what it wants replaced before inserting; the
+		// selection mirror (SetSelectionRange) makes those ranges arrive here already correct.
+		// The earlier local "replace the whole tracked span" variant fought the IME's own
+		// model, desynchronised the read-backs and ended with the IME refusing to convert.
+		const FString Before = CurrentValue();
+		const int32 Begin = FMath::Clamp(int32(InBeginIndex), 0, Before.Len());
+		const int32 End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Before.Len());
 
 		QueueText(EVaCuusInputEventKind::ImeSetTextInRange, Begin, End, InString);
 
 		LiveValue = Before.Left(Begin) + InString + Before.Mid(End);
-		LiveSelectionBegin = Begin + InString.Len();
-		LiveSelectionEnd = LiveSelectionBegin;
+		LiveSelectionBegin = LiveSelectionEnd = Begin + InString.Len();
 		bLiveDirty = true;
 
 		if (bIsComposing)
 		{
-			// The span is tracked here but NOT pushed as a composition-range event: TSF calls
-			// UpdateCompositionRange itself, and emitting a second range from inside the write
-			// re-enters RmlUi's composition state between two writes -- which is what made the
-			// candidate window stop appearing. EndComposition reads these two indices directly.
 			CompositionBeginIndex = Begin;
 			CompositionEndIndex = Begin + InString.Len();
 		}
@@ -995,23 +989,12 @@ public:
 		// with the same generation, so ordering against the mutations TSF already sent holds.
 		bIsComposing = false;
 
-		// THE COMMIT GOES OUT AS A WHOLE-VALUE REPLACE, NOT AS CommitComposition.
-		//
-		// CommitComposition uses RmlUi's OWN recorded composition range (ime_composition_begin/
-		// end_index), which is set by SetCompositionRange. When the queue still holds writes the
-		// UI thread has not drained, that recorded range describes a shorter text than the one
-		// we are committing against -- and the commit then replaces the WRONG span, in the
-		// observed case the entire value: "nihao" + commit came out empty.
-		//
-		// Replacing the whole value from the mirror needs no agreement about spans at all. The
-		// cost is that el maxlength is not enforced on the commit path; for an IME test page
-		// that is the right trade, and it is stated here rather than discovered later.
-		QueueWholeValue(LiveValue);
-
-		// The whole-value path does not pass through CommitComposition, so nothing else clears
-		// RmlUi's underline: without this the composed span keeps painting after the text has
-		// already been committed.
-		QueueCompositionRange(0, 0);
+		// COMPANY FIX, RESTORED: the commit goes through the REAL commit path. The drain-side
+		// ImeCommitComposition handler re-asserts the composition range before calling
+		// RmlUi's CommitComposition (which is what respects maxlength and clears the
+		// underline), so the "commit came out empty" failure the whole-value replace was
+		// compensating for cannot occur through this path with the range carried alongside.
+		QueueText(EVaCuusInputEventKind::ImeCommitComposition, Begin, End, Composed);
 
 		CompositionBeginIndex = INDEX_NONE;
 		CompositionEndIndex = INDEX_NONE;
@@ -1332,11 +1315,24 @@ void FVaCuusImeHandler::OnSnapshotRefreshed(const FVaCuusInteractiveSnapshot& Sn
 	const bool bWantActive = Snapshot.bTextInputFocused || bActivationHintPending;
 	if (bWantActive)
 	{
+		// A reformat that straddles a frame (multiline overflow rebuilding the inner line
+		// elements is the known case, 2026-11-18) can publish a single-frame "not focused"
+		// dropout; a click's field swap reads the same way for exactly one frame. Reset the
+		// debounce on every wanted frame.
+		ConsecutiveInactiveSnapshots = 0;
 		ActivateContext(/*bForce=*/bActivationHintPending);
 	}
 	else
 	{
-		DeactivateContext();
+		// DEBOUNCED DEACTIVATION: deactivate only after TWO consecutive inactive snapshots.
+		// The immediate path aborted real compositions on transient dropouts -- at multiline
+		// overflow the owner saw the field "clear and stop taking input": abort killed the
+		// in-flight composition, and the reactivation churn left nothing typing. Losing the
+		// keyboard for one extra frame on a genuine blur is invisible next to that.
+		if (++ConsecutiveInactiveSnapshots >= 2)
+		{
+			DeactivateContext();
+		}
 	}
 
 	if (!ChangeNotifier.IsValid())

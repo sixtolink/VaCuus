@@ -61,6 +61,6 @@
 		</div>
 	</div>
 
-	<script src="imedemo.js"/>
+	<script src="imedemo.js"></script>
 </body>
 </rml>

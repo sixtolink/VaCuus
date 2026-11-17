@@ -327,6 +327,10 @@ private:
 	bool bActivationHintPending = false;
 	uint64 ActivationHintSnapshotGeneration = 0;
 
+	/** Consecutive snapshots with no focused text field; deactivation is debounced on this
+	 *  (a reformat that straddles a frame -- multiline overflow -- reads as one bad frame). */
+	int32 ConsecutiveInactiveSnapshots = 0;
+
 	/** Previous frame's shadow value and selection, for the minimal-diff notifications. */
 	FString LastNotifiedValue;
 	int32 LastNotifiedSelectionBegin = 0;
