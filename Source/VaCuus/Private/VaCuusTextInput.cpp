@@ -726,27 +726,28 @@ public:
 	 */
 	void SetShadowState(const FVaCuusTextFieldState& InState)
 	{
+		// A CHANGED SNAPSHOT OUTRANKS THE MIRROR, COMPOSITION OR NOT.
+		//
+		// The mirror exists to stay ahead of a snapshot that is one frame behind. The moment
+		// the snapshot itself changes, RmlUi's text has changed with it, and the mirror has to
+		// follow or the two index spaces drift apart: the mirror keeps growing while the field
+		// stays short, every converted range then lands past the end, RmlUi clamps it to the
+		// end, and each write appends instead of replacing. That is the "n你n你n你" shape --
+		// not a range-arithmetic bug, a divergence that never re-synchronises.
+		//
+		// The old rule ("never overwrite the mirror while composing") is what made the
+		// divergence permanent. Keeping the mirror ahead is only needed WITHIN one game-thread
+		// burst, and no snapshot arrives inside a burst anyway, so this loses nothing.
+		const bool bSnapshotValueChanged = !State.Value.Equals(InState.Value, ESearchCase::CaseSensitive);
 		State = InState;
 
-		if (bIsComposing)
+		if (bSnapshotValueChanged || !bLiveDirty)
 		{
-			return;
+			LiveValue = State.Value;
+			LiveSelectionBegin = State.SelectionBegin;
+			LiveSelectionEnd = State.SelectionEnd;
+			bLiveDirty = false;
 		}
-
-		if (bLiveDirty)
-		{
-			if (State.Value == LiveValue)
-			{
-				LiveSelectionBegin = State.SelectionBegin;
-				LiveSelectionEnd = State.SelectionEnd;
-				bLiveDirty = false;
-			}
-			return;
-		}
-
-		LiveValue = State.Value;
-		LiveSelectionBegin = State.SelectionBegin;
-		LiveSelectionEnd = State.SelectionEnd;
 	}
 
 	/** The text the OS should see: the live mirror while it is ahead, else the snapshot. */
