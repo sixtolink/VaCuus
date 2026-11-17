@@ -735,6 +735,54 @@ bool FVaCuusTextEntryTest::RunTest(const FString& Parameters)
 			Host->FieldValue, FString(TEXT("Ok")));
 	}
 
+	// 9. THE WINDOWS COMPOSITION SEQUENCE, replayed exactly as the platform drives it.
+	//
+	// The section above gives the field one UI frame between the composition range and the
+	// commit, which is NOT what Windows does: SetTextInRange writes and EndComposition arrive
+	// inside the same game-thread message, before any snapshot can catch up. It also spells the
+	// write the way a human would -- replacing [0,2) -- where the platform actually re-sends the
+	// WHOLE composition string on every keystroke and lets BeginIndex follow the caret:
+	//
+	//     "n"   at 0, length 0
+	//     "ni"  at 1, length 0     <- index 1, not 0
+	//     "nih" at 3, length 0
+	//
+	// Splicing at those indices compounds: "n", then "nni", then "nninih". The span that must be
+	// replaced is the one the context was told about, not the one in the argument list. This case
+	// exists so that regression is red, not silent.
+	//
+	// Last on purpose: it leaves the field holding composition text, and every earlier section
+	// asserts against "Ok".
+	{
+		View->PollStatus();
+		ImeContext->BeginComposition();
+
+		// THE PLATFORM'S WRITE SHAPE: whole string each time, caret-following index.
+		ImeContext->SetTextInRange(0, 0, TEXT("n"));
+		ImeContext->SetTextInRange(1, 0, TEXT("ni"));
+		ImeContext->SetTextInRange(3, 0, TEXT("nih"));
+
+		// NO RunFrames HERE ON PURPOSE: the commit lands in the same burst.
+		ImeContext->UpdateCompositionRange(0, 3);
+		ImeContext->EndComposition();
+
+		if (!TestTrue(TEXT("UI frame ran after the burst"), RunFrames(*UIThread, 1)))
+		{
+			return false;
+		}
+		View->PollStatus();
+
+		// The caret sits wherever the previous section left it, so the composed run lands either
+		// before or after "Ok" -- asserting the whole string would encode that. What must hold
+		// regardless of position: THREE characters went in, and the compounding "nni"/"nninih"
+		// never appears.
+		TestEqual(TEXT("Three characters were added, not 1+2+3"), Host->FieldValue.Len(), 5);
+		TestFalse(TEXT("The composition text is not duplicated (no nni)"),
+			Host->FieldValue.Contains(TEXT("nni")));
+		TestTrue(TEXT("...and the composed run survived the commit"),
+			Host->FieldValue.Contains(TEXT("nih")));
+	}
+
 	UIThread->EnqueueRemoveView(ViewId);
 	TestTrue(TEXT("A UI frame survives the view removal"), RunFrames(*UIThread, 2));
 
