@@ -1,0 +1,90 @@
+<!-- imedemo.rml - IME 输入验证页（示例） -->
+<rml>
+<head>
+	<title>IME 输入验证</title>
+	<link type="text/rcss" href="../M5Hud/vacuus-base.rcss"/>
+	<link type="text/rcss" href="imedemo.rcss"/>
+</head>
+<body>
+	<div id="backdrop-glow"/>
+
+	<div id="panel">
+		<div id="header">
+			<div id="title-row">
+				<span id="badge">IME</span>
+				<h1>中文输入验证</h1>
+			</div>
+			<p class="subtitle">VaCuus · RmlUi · UE Win64</p>
+		</div>
+
+		<div class="card">
+			<label class="field-label">单行输入</label>
+			<input type="text" id="single" class="text-input" placeholder="在这里输入：nihao"/>
+			<div class="hint">选择候选词后，框内应只剩「你好」，不是 nihao</div>
+		</div>
+
+		<div class="card">
+			<label class="field-label">多行输入</label>
+			<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
+		</div>
+
+		<div class="card" id="result-card">
+			<label class="field-label">实时结果</label>
+			<div id="result-row">
+				<span class="kv">提交值</span>
+				<span id="committed" class="value">—</span>
+			</div>
+			<div id="result-row">
+				<span class="kv">字符数</span>
+				<span id="charcount" class="value">0</span>
+			</div>
+			<div id="result-row">
+				<span class="kv">事件数</span>
+				<span id="eventcount" class="value">0</span>
+			</div>
+		</div>
+
+		<div class="card checklist">
+			<label class="field-label">验收清单</label>
+			<ul>
+				<li>候选窗出现在输入框附近</li>
+				<li>选词后只留中文，没有拼音残留</li>
+				<li>Esc 取消不插入文本</li>
+				<li>Backspace 只删拼音</li>
+				<li>点击别处仍能穿透到游戏</li>
+			</ul>
+		</div>
+	</div>
+
+	<script>
+		var single = document.getElementById('single');
+		var multi = document.getElementById('multi');
+		var committedEl = document.getElementById('committed');
+		var charEl = document.getElementById('charcount');
+		var eventEl = document.getElementById('eventcount');
+		var events = 0;
+
+		function refresh() {
+			var v = single.value || '';
+			committedEl.innerHTML = v.length ? v : '—';
+			charEl.innerHTML = String(v.length);
+		}
+
+		single.addEventListener('input', function() {
+			events++;
+			eventEl.innerHTML = String(events);
+			refresh();
+		});
+
+		single.addEventListener('focus', function() {
+			events++;
+			eventEl.innerHTML = String(events);
+		});
+
+		single.addEventListener('blur', function() {
+			events++;
+			eventEl.innerHTML = String(events);
+		});
+	</script>
+</body>
+</rml>

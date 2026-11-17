@@ -704,11 +704,55 @@ public:
 		CompositionBeginIndex = 0;
 		CompositionEndIndex = 0;
 		State.Reset();
+		LiveValue.Reset();
+		LiveSelectionBegin = 0;
+		LiveSelectionEnd = 0;
+		bLiveDirty = false;
 		Surface = FVaCuusImeSurface();
 	}
 
-	/** Called once per game frame by the handler with the newest published shadow state. */
-	void SetShadowState(const FVaCuusTextFieldState& InState) { State = InState; }
+	/**
+	 * Called once per game frame by the handler with the newest published shadow state.
+	 *
+	 * THE LIVE MIRROR OUTRANKS THE SNAPSHOT, but only until the snapshot catches up.
+	 * A published snapshot is at best one frame old, and the OS can write text and end the
+	 * composition inside a single game-thread message -- so a commit that reads the snapshot
+	 * commits the text from before the write. See EndComposition.
+	 *
+	 * Handover rule: while a composition is in flight the mirror is NEVER overwritten (the
+	 * snapshot is guaranteed to be behind it). Outside a composition, drop the dirty flag as
+	 * soon as the snapshot carries the same value -- from then on the two are interchangeable
+	 * and the snapshot's selection is the authoritative one.
+	 */
+	void SetShadowState(const FVaCuusTextFieldState& InState)
+	{
+		State = InState;
+
+		if (bIsComposing)
+		{
+			return;
+		}
+
+		if (bLiveDirty)
+		{
+			if (State.Value == LiveValue)
+			{
+				LiveSelectionBegin = State.SelectionBegin;
+				LiveSelectionEnd = State.SelectionEnd;
+				bLiveDirty = false;
+			}
+			return;
+		}
+
+		LiveValue = State.Value;
+		LiveSelectionBegin = State.SelectionBegin;
+		LiveSelectionEnd = State.SelectionEnd;
+	}
+
+	/** The text the OS should see: the live mirror while it is ahead, else the snapshot. */
+	const FString& CurrentValue() const { return bLiveDirty ? LiveValue : State.Value; }
+	int32 CurrentSelectionBegin() const { return bLiveDirty ? LiveSelectionBegin : State.SelectionBegin; }
+	int32 CurrentSelectionEnd() const { return bLiveDirty ? LiveSelectionEnd : State.SelectionEnd; }
 
 	/** Called by the handler when the surface moved; the two coordinate bases live here. */
 	void SetSurface(const FVaCuusImeSurface& InSurface) { Surface = InSurface; }
@@ -741,12 +785,12 @@ public:
 
 	virtual bool IsReadOnly() override { return Owner == nullptr || State.bReadOnly; }
 
-	virtual uint32 GetTextLength() override { return uint32(State.Value.Len()); }
+	virtual uint32 GetTextLength() override { return uint32(CurrentValue().Len()); }
 
 	virtual void GetSelectionRange(uint32& OutBeginIndex, uint32& OutLength, ECaretPosition& OutCaretPosition) override
 	{
-		const int32 Begin = FMath::Clamp(State.SelectionBegin, 0, State.Value.Len());
-		const int32 End = FMath::Clamp(State.SelectionEnd, Begin, State.Value.Len());
+		const int32 Begin = FMath::Clamp(CurrentSelectionBegin(), 0, CurrentValue().Len());
+		const int32 End = FMath::Clamp(CurrentSelectionEnd(), Begin, CurrentValue().Len());
 
 		OutBeginIndex = uint32(Begin);
 		OutLength = uint32(End - Begin);
@@ -767,14 +811,34 @@ public:
 
 	virtual void GetTextInRange(const uint32 InBeginIndex, const uint32 InLength, FString& OutString) override
 	{
-		const int32 Begin = FMath::Clamp(int32(InBeginIndex), 0, State.Value.Len());
-		const int32 Length = FMath::Clamp(int32(InLength), 0, State.Value.Len() - Begin);
-		OutString = State.Value.Mid(Begin, Length);
+		const FString& Base = CurrentValue();
+		const int32 Begin = FMath::Clamp(int32(InBeginIndex), 0, Base.Len());
+		const int32 Length = FMath::Clamp(int32(InLength), 0, Base.Len() - Begin);
+		OutString = Base.Mid(Begin, Length);
 	}
 
 	virtual void SetTextInRange(const uint32 InBeginIndex, const uint32 InLength, const FString& InString) override
 	{
-		QueueText(EVaCuusInputEventKind::ImeSetTextInRange, int32(InBeginIndex), int32(InBeginIndex + InLength), InString);
+		// MIRROR FIRST, QUEUE SECOND -- and both against the same "before" text.
+		// The queue call converts UTF-16 indices against CurrentValue(), so it has to run
+		// BEFORE the mirror is mutated, or the converted range would describe the new text.
+		const FString Before = CurrentValue();
+		const int32 Begin = FMath::Clamp(int32(InBeginIndex), 0, Before.Len());
+		const int32 End = FMath::Clamp(int32(InBeginIndex + InLength), Begin, Before.Len());
+
+		QueueText(EVaCuusInputEventKind::ImeSetTextInRange, Begin, End, InString);
+
+		LiveValue = Before.Left(Begin) + InString + Before.Mid(End);
+		LiveSelectionBegin = Begin + InString.Len();
+		LiveSelectionEnd = LiveSelectionBegin;
+		bLiveDirty = true;
+
+		// A write that lands inside a composition IS the composition text: keep the span on it.
+		if (bIsComposing)
+		{
+			CompositionBeginIndex = Begin;
+			CompositionEndIndex = Begin + InString.Len();
+		}
 	}
 
 	virtual int32 GetCharacterIndexFromPoint(const FVector2D& InPoint) override
@@ -847,8 +911,8 @@ public:
 		// composes over the current selection when there is one. Captured now because the
 		// range TSF sends to UpdateCompositionRange is relative to the whole text, and the
 		// commit needs to know which span to replace even if the selection has moved since.
-		CompositionBeginIndex = FMath::Clamp(State.SelectionBegin, 0, State.Value.Len());
-		CompositionEndIndex = FMath::Clamp(State.SelectionEnd, CompositionBeginIndex, State.Value.Len());
+		CompositionBeginIndex = FMath::Clamp(CurrentSelectionBegin(), 0, CurrentValue().Len());
+		CompositionEndIndex = FMath::Clamp(CurrentSelectionEnd(), CompositionBeginIndex, CurrentValue().Len());
 	}
 
 	virtual void UpdateCompositionRange(const int32 InBeginIndex, const uint32 InLength) override
@@ -861,8 +925,8 @@ public:
 			return;
 		}
 
-		CompositionBeginIndex = FMath::Clamp(InBeginIndex, 0, State.Value.Len());
-		CompositionEndIndex = FMath::Clamp(InBeginIndex + int32(InLength), CompositionBeginIndex, State.Value.Len());
+		CompositionBeginIndex = FMath::Clamp(InBeginIndex, 0, CurrentValue().Len());
+		CompositionEndIndex = FMath::Clamp(InBeginIndex + int32(InLength), CompositionBeginIndex, CurrentValue().Len());
 		QueueCompositionRange(CompositionBeginIndex, CompositionEndIndex);
 	}
 
@@ -875,11 +939,16 @@ public:
 
 		// The composed text is whatever is in the field's composing span RIGHT NOW: TSF has
 		// been writing it through SetTextInRange all along, so the commit re-asserts that span
-		// rather than carrying its own string. Taken from the shadow value, which is why the
-		// clamps above matter.
-		const int32 Begin = FMath::Clamp(CompositionBeginIndex, 0, State.Value.Len());
-		const int32 End = FMath::Clamp(CompositionEndIndex, Begin, State.Value.Len());
-		const FString Composed = State.Value.Mid(Begin, End - Begin);
+		// rather than carrying its own string.
+		//
+		// TAKEN FROM THE LIVE MIRROR, NOT THE SNAPSHOT. Windows sends SetTextInRange("你好")
+		// and EndComposition() inside the SAME game-thread message, so the snapshot still holds
+		// the previous frame's "nihao" -- committing from it replaces the result with the pinyin.
+		// The mirror is updated synchronously by SetTextInRange, so it already has "你好".
+		const FString& LiveText = CurrentValue();
+		const int32 Begin = FMath::Clamp(CompositionBeginIndex, 0, LiveText.Len());
+		const int32 End = FMath::Clamp(CompositionEndIndex, Begin, LiveText.Len());
+		const FString Composed = LiveText.Mid(Begin, End - Begin);
 
 		// bIsComposing is cleared BEFORE the queue call so the notifier suppression in the
 		// handler stops applying from here on -- but note the queued event is still stamped
@@ -899,6 +968,18 @@ private:
 
 	/** The published shadow, refreshed once per game frame. */
 	FVaCuusTextFieldState State;
+
+	/**
+	 * The live mirror: text as of the last SetTextInRange on THIS thread.
+	 *
+	 * Exists because the OS writes text and ends the composition inside one game-thread
+	 * message, while the snapshot only refreshes between frames. Reads and the commit use
+	 * this while it is dirty; see SetShadowState for the handover back to the snapshot.
+	 */
+	FString LiveValue;
+	int32 LiveSelectionBegin = 0;
+	int32 LiveSelectionEnd = 0;
+	bool bLiveDirty = false;
 
 	/** Where the surface is; the only coordinate basis this class has. */
 	FVaCuusImeSurface Surface;
@@ -947,8 +1028,9 @@ void FVaCuusTextInputMethodContext::QueueSelectionRange(int32 Utf16Begin, int32 
 	}
 
 	// INDEX-SPACE CONVERSION SITE 3 (and 4): engine UTF-16 -> RmlUi character offsets.
-	const int32 BeginChars = VaCuusTextInput::Utf16IndexToCharacterOffset(State.Value, Utf16Begin);
-	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(State.Value, Utf16End);
+	// Against CurrentValue(), the same text the caller's indices came from.
+	const int32 BeginChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16Begin);
+	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16End);
 
 	Owner->QueueImeEvent(
 		FVaCuusInputEvent::ImeSetSelectionRange(State.Generation, BeginChars, EndChars, bCaretAtBeginning));
@@ -962,8 +1044,8 @@ void FVaCuusTextInputMethodContext::QueueText(
 		return;
 	}
 
-	const int32 BeginChars = VaCuusTextInput::Utf16IndexToCharacterOffset(State.Value, Utf16Begin);
-	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(State.Value, Utf16End);
+	const int32 BeginChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16Begin);
+	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16End);
 
 	if (Kind == EVaCuusInputEventKind::ImeCommitComposition)
 	{
@@ -982,8 +1064,8 @@ void FVaCuusTextInputMethodContext::QueueCompositionRange(int32 Utf16Begin, int3
 		return;
 	}
 
-	const int32 BeginChars = VaCuusTextInput::Utf16IndexToCharacterOffset(State.Value, Utf16Begin);
-	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(State.Value, Utf16End);
+	const int32 BeginChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16Begin);
+	const int32 EndChars = VaCuusTextInput::Utf16IndexToCharacterOffset(CurrentValue(), Utf16End);
 
 	Owner->QueueImeEvent(FVaCuusInputEvent::ImeSetCompositionRange(State.Generation, BeginChars, EndChars));
 }
