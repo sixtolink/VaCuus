@@ -25,7 +25,9 @@
 
 		<div class="card">
 			<label class="field-label">多行输入</label>
-			<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
+			<div id="multi-scroll">
+				<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
+			</div>
 		</div>
 
 		<div class="card" id="result-card">
@@ -61,6 +63,6 @@
 			</ul>
 		
 	
-
+	<script src="imedemo.js"></script>
 </body>
 </rml>

@@ -113,7 +113,9 @@ h1 {
 	background: #08101d;
 }
 
-.text-area {
+/* Company fix (VaCuus-Multiline-Fix.html): outer box owns height/border/scroll.
+   Textarea inside is edit-only, JS-grown, internal scroll killed inline. */
+#multi-scroll {
 	display: block;
 	box-sizing: border-box;
 	width: 100%;
@@ -122,13 +124,30 @@ h1 {
 	background: #070c16;
 	border: 1px solid #253550;
 	border-radius: 8px;
+	overflow-y: auto;
+}
+
+#multi-scroll.focused { border-color: #1f6feb; }
+
+/* RmlUi has no default scrollbar style: explicit width or the bar is invisible. */
+#multi-scroll scrollbarvertical { width: 8px; }
+#multi-scroll scrollbarvertical slidertrack { background: #0a1526; border-radius: 4px; }
+#multi-scroll scrollbarvertical slidertrack sliderbar { background: #2a4a73; border-radius: 4px; }
+
+.text-area {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	height: 72px;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
 	color: #e6edf7;
 	font-family: LatoLatin, CJK;
 	font-size: 15px;
 	line-height: 24px;
 }
-
-.text-area:focus { border-color: #1f6feb; }
 
 .hint {
 	margin-top: 8px;
