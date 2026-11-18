@@ -739,17 +739,15 @@ bool FVaCuusTextEntryTest::RunTest(const FString& Parameters)
 	//
 	// The section above gives the field one UI frame between the composition range and the
 	// commit, which is NOT what Windows does: SetTextInRange writes and EndComposition arrive
-	// inside the same game-thread message, before any snapshot can catch up. It also spells the
-	// write the way a human would -- replacing [0,2) -- where the platform actually re-sends the
-	// WHOLE composition string on every keystroke and lets BeginIndex follow the caret:
+	// inside the same game-thread message, before any snapshot can catch up.
 	//
-	//     "n"   at 0, length 0
-	//     "ni"  at 1, length 0     <- index 1, not 0
-	//     "nih" at 3, length 0
-	//
-	// Splicing at those indices compounds: "n", then "nni", then "nninih". The span that must be
-	// replaced is the one the context was told about, not the one in the argument list. This case
-	// exists so that regression is red, not silent.
+	// MODEL CORRECTION (2026-11-18, with a live MS-Pinyin TSF trace as the witness): the
+	// platform sends PROGRESSIVE REPLACE RANGES anchored at the composition start -- select
+	// the span, then "n" replacing [0,0), "ni" replacing [0,1), "nih" replacing [0,2) -- the
+	// same shape the company fix implements (SetSelectionRange mirrors immediately, so
+	// InsertAtInsertion derives replace ranges from it). The earlier "whole string at a
+	// caret-following index" model was a misreading; with the company semantics in place,
+	// this case replays the REAL shape and stays red if the old model ever sneaks back.
 	//
 	// Last on purpose: it leaves the field holding composition text, and every earlier section
 	// asserts against "Ok".
@@ -757,13 +755,14 @@ bool FVaCuusTextEntryTest::RunTest(const FString& Parameters)
 		View->PollStatus();
 		ImeContext->BeginComposition();
 
-		// THE PLATFORM'S WRITE SHAPE: whole string each time, caret-following index.
-		ImeContext->SetTextInRange(0, 0, TEXT("n"));
-		ImeContext->SetTextInRange(1, 0, TEXT("ni"));
-		ImeContext->SetTextInRange(3, 0, TEXT("nih"));
+		// THE PLATFORM'S WRITE SHAPE: progressive replaces anchored at the span start.
+		ImeContext->SetSelectionRange(2, 0, ITextInputMethodContext::ECaretPosition::Ending);
+		ImeContext->SetTextInRange(2, 0, TEXT("n"));
+		ImeContext->SetTextInRange(2, 1, TEXT("ni"));
+		ImeContext->SetTextInRange(2, 2, TEXT("nih"));
 
 		// NO RunFrames HERE ON PURPOSE: the commit lands in the same burst.
-		ImeContext->UpdateCompositionRange(0, 3);
+		ImeContext->UpdateCompositionRange(2, 3);
 		ImeContext->EndComposition();
 
 		if (!TestTrue(TEXT("UI frame ran after the burst"), RunFrames(*UIThread, 1)))
