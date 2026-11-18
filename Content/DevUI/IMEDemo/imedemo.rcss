@@ -113,8 +113,13 @@ h1 {
 	background: #08101d;
 }
 
-/* height 96 = 24 * 3 lines + 12 + 12 */
-.text-area {
+/* 2026-11-18 company fix (VaCuus-Multiline-Fix.html): the OUTER box owns
+   height/border/scroll; the textarea inside only edits and grows (imedemo.js).
+   RmlUi textareas get a constructor inline overflow-y:auto -- only an INLINE
+   hidden from script beats it; that internal scroll path is what blanked the
+   field on overflow. Height 96 = 24*3 lines + 12*2 padding (unchanged). */
+#multi-scroll {
+	display: block;
 	box-sizing: border-box;
 	width: 100%;
 	height: 96px;
@@ -122,12 +127,32 @@ h1 {
 	background: #070c16;
 	border: 1px solid #253550;
 	border-radius: 8px;
+	overflow-y: auto;
+}
+
+#multi-scroll.focused { border-color: #1f6feb; }
+
+/* RmlUi has no default scrollbar style: without an explicit width the bar is
+   zero-width and invisible (fix note, key detail #4). */
+#multi-scroll scrollbarvertical { width: 8px; }
+#multi-scroll scrollbarvertical slidertrack { background: #0a1526; border-radius: 4px; }
+#multi-scroll scrollbarvertical slidertrack sliderbar { background: #2a4a73; border-radius: 4px; }
+
+.text-area {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	/* Content-driven from imedemo.js (GROW); minimum = the scroller's content
+	   area (96 - 2*12 padding) so the empty state fills the box. */
+	height: 72px;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
 	color: #e6edf7;
 	font-size: 15px;
 	line-height: 24px;
 }
-
-.text-area:focus { border-color: #1f6feb; }
 
 .hint {
 	margin-top: 8px;

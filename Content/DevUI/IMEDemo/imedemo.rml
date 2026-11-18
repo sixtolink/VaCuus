@@ -25,14 +25,24 @@
 
 		<div class="card">
 			<label class="field-label">多行输入</label>
-			<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
+			<!-- 2026-11-18 company fix: outer fixed-height scroller owns the scrolling;
+			     the textarea only edits, grows with content, and its internal scroll is
+			     force-disabled inline by imedemo.js (stylesheet loses to the constructor's
+			     inline auto overflow). See VaCuus-Multiline-Fix.html. -->
+			<div id="multi-scroll">
+				<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
+			</div>
 		</div>
 
 		<div class="card" id="result-card">
 			<label class="field-label">实时结果</label>
 			<div id="result-row">
-				<span class="kv">提交值</span>
+				<span class="kv">single 值</span>
 				<span id="committed" class="value">—</span>
+			</div>
+			<div id="result-row">
+				<span class="kv">multi 值</span>
+				<span id="multivalue" class="value">—</span>
 			</div>
 			<div id="result-row">
 				<span class="kv">字符数</span>
@@ -42,6 +52,7 @@
 				<span class="kv">事件数</span>
 				<span id="eventcount" class="value">0</span>
 			</div>
+			<div class="hint">轮询显示（150ms）。原生 IME 上屏不走 DOM 事件，事件数只计普通键盘 textinput；显示用 innerRML（innerHTML/textContent 在本 DOM 子集是空操作）。</div>
 		</div>
 
 		<div class="card checklist">
@@ -51,40 +62,12 @@
 				<li>选词后只留中文，没有拼音残留</li>
 				<li>Esc 取消不插入文本</li>
 				<li>Backspace 只删拼音</li>
+				<li>多行超过 4 行：外层滚动、内容不清空</li>
 				<li>点击别处仍能穿透到游戏</li>
 			</ul>
 		</div>
 	</div>
 
-	<script>
-		var single = document.getElementById('single');
-		var multi = document.getElementById('multi');
-		var committedEl = document.getElementById('committed');
-		var charEl = document.getElementById('charcount');
-		var eventEl = document.getElementById('eventcount');
-		var events = 0;
-
-		function refresh() {
-			var v = single.value || '';
-			committedEl.innerHTML = v.length ? v : '—';
-			charEl.innerHTML = String(v.length);
-		}
-
-		single.addEventListener('input', function() {
-			events++;
-			eventEl.innerHTML = String(events);
-			refresh();
-		});
-
-		single.addEventListener('focus', function() {
-			events++;
-			eventEl.innerHTML = String(events);
-		});
-
-		single.addEventListener('blur', function() {
-			events++;
-			eventEl.innerHTML = String(events);
-		});
-	</script>
+	<script src="imedemo.js"></script>
 </body>
 </rml>
