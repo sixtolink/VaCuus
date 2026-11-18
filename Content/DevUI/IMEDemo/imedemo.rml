@@ -26,7 +26,7 @@
 		<div class="card">
 			<label class="field-label">多行输入</label>
 			<div id="multi-scroll">
-				<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
+				<textarea id="multi" class="text-area" rows="20" placeholder="多行中文输入测试…"></textarea>
 			</div>
 		</div>
 
