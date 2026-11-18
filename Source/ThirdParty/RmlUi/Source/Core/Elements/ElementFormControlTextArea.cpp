@@ -172,7 +172,13 @@ void ElementFormControlTextArea::SetWordWrapProperties()
 {
 	const bool word_wrap = GetWordWrap();
 	SetProperty(PropertyId::OverflowX, Property(word_wrap ? Style::Overflow::Hidden : Style::Overflow::Auto));
-	SetProperty(PropertyId::OverflowY, Property(Style::Overflow::Auto));
+	// VaCuus homelab patch (2026-11-18): OverflowY Hidden instead of Auto.
+	// The constructor's inline Auto put every textarea into its own internal scroll
+	// path the moment content exceeded the box -- the IME kept committing (trace
+	// proved it) but the widget scrolled the text out of view ("four lines then
+	// blank"). Scrolling belongs to an OUTER wrapper with overflow-y:auto; the
+	// textarea itself is edit-only. See VaCuus-Multiline-Fix.html §02.
+	SetProperty(PropertyId::OverflowY, Property(Style::Overflow::Hidden));
 	SetProperty(PropertyId::WhiteSpace, Property(word_wrap ? Style::WhiteSpace::Prewrap : Style::WhiteSpace::Pre));
 }
 
