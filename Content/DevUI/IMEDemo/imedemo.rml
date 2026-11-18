@@ -13,25 +13,19 @@
 			<div id="title-row">
 				<span id="badge">IME</span>
 				<h1>中文输入验证</h1>
-			</div>
+			
 			<p class="subtitle">VaCuus · RmlUi · UE Win64</p>
-		</div>
+		
 
 		<div class="card">
 			<label class="field-label">单行输入</label>
 			<input type="text" id="single" class="text-input" placeholder="在这里输入：nihao"/>
-			<div class="hint">选择候选词后，框内应只剩「你好」，不是 nihao</div>
-		</div>
+			<div class="hint">选择候选词后，框内应只剩「你好」，不是 nihao
+		
 
 		<div class="card">
 			<label class="field-label">多行输入</label>
-			<!-- 2026-11-18 company fix: outer fixed-height scroller owns the scrolling;
-			     the textarea only edits, grows with content, and its internal scroll is
-			     force-disabled inline by imedemo.js (stylesheet loses to the constructor's
-			     inline auto overflow). See VaCuus-Multiline-Fix.html. -->
-			<div id="multi-scroll">
-				<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
-			</div>
+			<textarea id="multi" class="text-area" placeholder="多行中文输入测试…"></textarea>
 		</div>
 
 		<div class="card" id="result-card">
@@ -39,21 +33,21 @@
 			<div id="result-row">
 				<span class="kv">single 值</span>
 				<span id="committed" class="value">—</span>
-			</div>
+			
 			<div id="result-row">
 				<span class="kv">multi 值</span>
 				<span id="multivalue" class="value">—</span>
-			</div>
+			
 			<div id="result-row">
 				<span class="kv">字符数</span>
 				<span id="charcount" class="value">0</span>
-			</div>
+			
 			<div id="result-row">
 				<span class="kv">事件数</span>
 				<span id="eventcount" class="value">0</span>
-			</div>
-			<div class="hint">轮询显示（150ms）。原生 IME 上屏不走 DOM 事件，事件数只计普通键盘 textinput；显示用 innerRML（innerHTML/textContent 在本 DOM 子集是空操作）。</div>
-		</div>
+			
+			<div class="hint">轮询显示（150ms）。原生 IME 上屏不走 DOM 事件，事件数只计普通键盘 textinput；显示用 innerRML（innerHTML/textContent 在本 DOM 子集是空操作）。
+		
 
 		<div class="card checklist">
 			<label class="field-label">验收清单</label>
@@ -65,9 +59,8 @@
 				<li>多行超过 4 行：外层滚动、内容不清空</li>
 				<li>点击别处仍能穿透到游戏</li>
 			</ul>
-		</div>
-	</div>
+		
+	
 
-	<script src="imedemo.js"></script>
 </body>
 </rml>
