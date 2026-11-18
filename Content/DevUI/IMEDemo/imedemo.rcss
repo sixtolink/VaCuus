@@ -138,7 +138,7 @@ h1 {
 	display: block;
 	box-sizing: border-box;
 	width: 100%;
-	/* Height from rows=20 in the RML (RmlUi native); the wrapper clips + scrolls. */
+	height: 480px;   /* Explicit CSS height: the ONLY mechanism RmlUi's layout reliably honors. 480px = 20 lines; wrapper (96px, overflow-y:auto) clips + scrollbar. */
 	padding: 0;
 	background: transparent;
 	border: 0;
