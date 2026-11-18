@@ -156,6 +156,35 @@ bool FVaCuusEngine::Initialize()
 			DefaultFontVfsPath, *FString::Join(VaCuusContentPaths::GetDocumentRoots(), TEXT(" | ")));
 	}
 
+	// CJK FALLBACK FACE (2026-11-18): CSS @font-face with -rmlui-fallback-face is NOT
+	// enough -- RmlUi lazy-loads faces only when the family is actually rendered, so a
+	// fallback declared in CSS never triggers a load until the primary font already
+	// failed, and by then the tofu is on screen (postmortem hard rule #1: "CJK needs
+	// a registered fallback face; do not debug the IME for a font problem"). The fix
+	// is the API call the postmortem names: LoadFontFace(path, /*fallback=*/true)
+	// BEFORE any document loads, which registers the face with the font engine so the
+	// per-glyph fallback lookup has a live face to find. SimHei is the household CJK
+	// face (9.7MB, covers SC + some TC); missing file is a warning, not a failure.
+	static const TCHAR* CjkFontVfsPath = TEXT("fonts/SimHei.ttf");
+	const FString CjkDiskPath = VaCuusContentPaths::ResolveExistingDocument(CjkFontVfsPath);
+	if (!CjkDiskPath.IsEmpty())
+	{
+		if (!Rml::LoadFontFace(TCHAR_TO_UTF8(CjkFontVfsPath), /*fallback_face=*/true))
+		{
+			UE_LOG(LogVaCuus, Warning, TEXT("Failed to load CJK fallback font from '%s'"), *CjkDiskPath);
+		}
+		else
+		{
+			UE_LOG(LogVaCuus, Log, TEXT("CJK fallback face loaded from '%s'"), *CjkDiskPath);
+		}
+	}
+	else
+	{
+		UE_LOG(LogVaCuus, Warning,
+			TEXT("CJK font '%s' not found under any DevUI root; Chinese text will render as tofu"),
+			CjkFontVfsPath);
+	}
+
 	// Published last: a reader that sees a non-zero refcount sees a booted library.
 	RefCount.store(1, std::memory_order_release);
 
